@@ -1,0 +1,44 @@
+{
+  "appId": "com.xiaocige.lyrics",
+  "productName": "小词格",
+  "copyright": "Copyright © 2026 小词格",
+  "publish": null,
+  "asar": false,
+  "directories": {
+    "output": "release",
+    "buildResources": "build"
+  },
+  "files": [
+    "electron/**/*",
+    ".next/standalone/**/*",
+    "package.json"
+  ],
+  "extraMetadata": {
+    "name": "xiao-cige-lyrics-generator",
+    "version": "1.0.0",
+    "main": "electron/main.js"
+  },
+  "win": {
+    "target": [
+      {
+        "target": "nsis",
+        "arch": ["x64"]
+      }
+    ],
+    "icon": "build/icon.ico",
+    "signAndEditExecutable": false
+  },
+  "nsis": {
+    "oneClick": false,
+    "perMachine": false,
+    "allowToChangeInstallationDirectory": true,
+    "installerIcon": "build/icon.ico",
+    "uninstallerIcon": "build/icon.ico",
+    "installerHeaderIcon": "build/icon.ico",
+    "include": "build/installer.nsh",
+    "shortcutName": "小词格",
+    "createDesktopShortcut": true,
+    "createStartMenuShortcut": true,
+    "deleteAppDataOnUninstall": false
+  }
+}

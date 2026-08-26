@@ -1,0 +1,36 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light dark;
+}
+
+html,
+body {
+  padding: 0;
+  margin: 0;
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+    "Helvetica Neue", "PingFang SC", "Microsoft YaHei", sans-serif;
+}
+
+/* 歌词文本：等宽 / 衬线风格，便于阅读词格 */
+.lyric-text {
+  font-family: var(--font-lyric, ui-monospace, "Songti SC", "SimSun", serif);
+  line-height: 1.9;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* 自定义滚动条（深色模式适配） */
+.lyric-scroll::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.lyric-scroll::-webkit-scrollbar-thumb {
+  background-color: rgba(120, 120, 140, 0.4);
+  border-radius: 4px;
+}
+.lyric-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
