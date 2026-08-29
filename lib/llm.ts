@@ -88,23 +88,12 @@ function buildBrowserLikeHeaders(baseURL?: string): Record<string, string> {
   return headers;
 }
 
-// 自定义 fetch：在原生 fetch 基础上增加错误信息增强
-// 解决 OpenAI SDK 的 APIConnectionError 只报 "Connection error." 无细节的问题
-function createRobustFetch() {
-  return async (input: RequestInfo | URL, init?: RequestInit) => {
-    try {
-      return await fetch(input, init);
-    } catch (err) {
-      // 原生 fetch 失败时，把底层错误细节附加到 message
-      const cause = err instanceof Error ? err.message : String(err);
-      const enhanced = new Error(
-        `Connection error (fetch 失败: ${cause})。请检查网络连接、DNS 解析、代理设置，以及服务商 baseURL 是否可访问。`
-      );
-      (enhanced as Error & { cause?: unknown }).cause = err;
-      throw enhanced;
-    }
-  };
-}
+// 注意：不覆盖 OpenAI SDK 的默认 fetch。
+// Electron 在 ELECTRON_RUN_AS_NODE 模式下，内嵌 Node.js 的全局 fetch（基于 undici）
+// 在 HTTPS 请求时可能不可靠（TLS 握手失败、连接被重置等），导致 "Failed to fetch"。
+// OpenAI SDK 在 Node.js 环境下默认使用 node-fetch v2（基于 node:http/https），
+// 不依赖全局 fetch，在 Electron 内嵌 Node.js 中更稳定。
+// 错误信息增强改在 callLLM 的 catch 块中处理。
 
 // 按需创建客户端（每次调用配置可能不同，故不缓存单例）
 function createClient(cfg: ResolvedConfig): OpenAI {
@@ -114,8 +103,21 @@ function createClient(cfg: ResolvedConfig): OpenAI {
     timeout: getTimeoutMs(),
     maxRetries: 0, // SDK 内置重试不便于控制退避与文案识别，改在 callLLM 外层手动重试
     defaultHeaders: buildBrowserLikeHeaders(cfg.baseURL),
-    fetch: createRobustFetch(),
   });
+}
+
+// 增强 APIConnectionError 的错误信息（SDK 默认只报 "Connection error." 无细节）
+function enhanceConnectionError(err: Error): Error {
+  const msg = err.message || "";
+  // 仅增强连接类错误，避免误改业务错误
+  if (/connection error|fetch fail|network|ECONN|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|getaddrinfo|socket hang up|请求超时|无响应|自动中断/i.test(msg)) {
+    const enhanced = new Error(
+      `Connection error (fetch 失败: ${msg})。请检查网络连接、DNS 解析、代理设置，以及服务商 baseURL 是否可访问。`
+    );
+    (enhanced as Error & { cause?: unknown }).cause = err;
+    return enhanced;
+  }
+  return err;
 }
 
 // 判断错误是否可能由 response_format 引起（部分服务商/免费端点不支持 JSON 模式）
@@ -197,6 +199,10 @@ export async function callLLM({
         throw new LLMCallError(
           `请求超时（${timeoutMs / 1000}s 内无响应，已自动中断）。可能原因：模型推理过慢、网络不稳定、服务商内部排队。将自动重试。`
         );
+      }
+      // 增强连接类错误的错误信息（SDK 默认 "Connection error." 无细节）
+      if (err instanceof Error) {
+        throw enhanceConnectionError(err);
       }
       throw err;
     } finally {

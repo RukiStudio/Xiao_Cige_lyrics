@@ -9,7 +9,7 @@ export interface LLMConfig {
 export interface LyricRequest {
   prompt: string; // 提示词，如"中国风 思念 雨夜"
   structure: string; // 词格描述，自由文本
-  rounds?: number; // 最大非字数修复迭代轮数，默认 3，范围 1-10（纯字数修复不计入）
+  rounds?: number; // 最少内容迭代轮数，默认 3，范围 1-10。达到最少轮数后若评分达标则停止，未达标则继续直到 maxRounds 上限（纯字数修复不计入）
   syllable_fix_rounds?: number; // 最大纯字数修复轮数上限，默认 5，范围 1-20
   threshold?: number; // 通过阈值，默认 80，范围 0-100
   temperature?: number; // LLM 温度，默认 0.8

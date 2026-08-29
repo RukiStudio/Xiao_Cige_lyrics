@@ -35,6 +35,7 @@ next-env.d.ts
 # electron build output
 /release/
 /.electron-cache/
+/.electron-builder-cache/
 /.eb-cache/
 
 # large binary artifacts (exceed GitHub 100MB limit, use Releases instead)

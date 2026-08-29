@@ -316,6 +316,11 @@ export async function generateLyrics(
     lyrics_language = "zh",
   } = req;
 
+  // rounds 语义为"最少迭代轮数"：即使评分达标也至少迭代 N 轮
+  // 超过最少轮数后若评分达标则停止，未达标则继续直到达标或达到 maxRounds 上限
+  // maxRounds 上限 = max(rounds * 3, rounds + 5)，且不超过 30，避免无限循环
+  const maxRounds = Math.min(Math.max(rounds * 3, rounds + 5), 30);
+
   // 用户自定义 system prompt 优先，否则用默认
   // 语言模式附加指令无论是否自定义都注入（保证中英文切换生效）
   const generatorSystem =
@@ -334,10 +339,10 @@ export async function generateLyrics(
 
   emit({
     type: "start",
-    total_rounds: rounds,
+    total_rounds: maxRounds,
     syllable_fix_total_rounds: syllable_fix_rounds,
     threshold,
-    stage: `参数已确认：内容迭代 ${rounds} 轮，纯字数修复 ${syllable_fix_rounds} 轮上限`,
+    stage: `参数已确认：最少迭代 ${rounds} 轮（未达标则继续，上限 ${maxRounds} 轮），纯字数修复 ${syllable_fix_rounds} 轮上限`,
   });
 
   // 1. 初始生成
@@ -365,14 +370,16 @@ export async function generateLyrics(
   }
 
   // 已达标时的快速返回：async 返回 LyricResponse
+  // reachedMinRounds：是否已达到最少迭代轮数；未达到时不提前返回，继续迭代以充分打磨
   async function attemptEarlyReturn(
     crit: CritiqueReport,
     roundLabel: number,
-    syllableFixLabel: number | undefined
+    syllableFixLabel: number | undefined,
+    reachedMinRounds: boolean
   ): Promise<LyricResponse | null> {
     const structurePerfect = crit.dimensions.structure_adherence >= 10;
     const scorePassed = crit.passed || crit.total_score >= threshold;
-    if (scorePassed && structurePerfect) {
+    if (scorePassed && structurePerfect && reachedMinRounds) {
       // 词解生成（不阻断主流程，失败留空）
       emit({
         type: "interpreting",
@@ -430,7 +437,7 @@ export async function generateLyrics(
       syllable_fix_round: inSyllableFix ? syllableFixUsed : undefined,
       stage: inSyllableFix
         ? `字数修复第 ${syllableFixUsed}/${syllable_fix_rounds} 轮评审`
-        : `第 ${mainRound}/${rounds} 轮评审：Critic 正在打分与挑刺`,
+        : `第 ${mainRound}/${maxRounds} 轮评审：Critic 正在打分与挑刺${mainRound > rounds ? "（已达最少轮数，未达标继续）" : ""}`,
     });
     const critique = await callCritic({
       prompt,
@@ -461,8 +468,9 @@ export async function generateLyrics(
         : `第 ${mainRound} 轮评审完成：得分 ${critique.total_score}（词格符合度 ${critique.dimensions.structure_adherence}/10）`,
     });
 
-    // 达标快速返回
-    const early = await attemptEarlyReturn(critique, mainRound, inSyllableFix ? syllableFixUsed : undefined);
+    // 达标快速返回：仅在达到最少轮数 rounds 后才允许提前返回
+    // 未达到最少轮数时即使达标也继续迭代，以充分打磨歌词
+    const early = await attemptEarlyReturn(critique, mainRound, inSyllableFix ? syllableFixUsed : undefined, mainRound >= rounds);
     if (early) return { kind: "passed", response: early };
 
     // 判定是否纯字数问题
@@ -504,15 +512,16 @@ export async function generateLyrics(
     }
 
     // 正常主轮次分支
-    if (mainRound < rounds) {
+    // 达到 maxRounds 上限前继续修改；达到上限后进入最终评审
+    if (mainRound < maxRounds) {
       const critiqueForReviser = withSyllableFixDirective(critique, !structurePerfect, lyrics_language);
       emit({
         type: "revising",
         round: mainRound,
         syllable_fix_round: inSyllableFix ? syllableFixUsed : undefined,
         stage: !structurePerfect
-          ? `第 ${mainRound}/${rounds} 轮修改：词格+内容综合改进`
-          : `第 ${mainRound}/${rounds} 轮修改：Reviser 根据评审意见改进歌词`,
+          ? `第 ${mainRound}/${maxRounds} 轮修改：词格+内容综合改进${mainRound >= rounds ? "（已达最少轮数，未达标继续）" : ""}`
+          : `第 ${mainRound}/${maxRounds} 轮修改：Reviser 根据评审意见改进歌词${mainRound >= rounds ? "（已达最少轮数，未达标继续）" : ""}`,
       });
       const revised = await callLLMWithInfraRetry({
         system: reviserSystem,
@@ -535,15 +544,18 @@ export async function generateLyrics(
   }
 
   // 2. 主迭代：主轮次（内嵌套纯字数修复子循环）
+  // 至少迭代 rounds 轮，未达标则继续直到 maxRounds 上限
   let mainRound = 1;
-  outer: while (mainRound <= rounds) {
+  outer: while (mainRound <= maxRounds) {
     emit({
       type: "round_start",
       round: mainRound,
-      total_rounds: rounds,
+      total_rounds: maxRounds,
       syllable_fix_round: syllableFixUsed || undefined,
       syllable_fix_total_rounds: syllable_fix_rounds,
-      stage: `进入第 ${mainRound}/${rounds} 轮内容迭代`,
+      stage: mainRound <= rounds
+        ? `进入第 ${mainRound}/${rounds} 轮（最少 ${rounds} 轮）内容迭代`
+        : `进入第 ${mainRound}/${maxRounds} 轮内容迭代（已达最少轮数 ${rounds}，未达标继续）`,
     });
 
     // 进入本次迭代前，先做一次评审-修改
@@ -566,12 +578,12 @@ export async function generateLyrics(
     }
   }
 
-  // 3. 达到主轮次上限或字数修复上限后：最终评审
+  // 3. 达到最大轮数上限或字数修复上限后：最终评审
   emit({
     type: "final_critique",
-    round: rounds,
+    round: maxRounds,
     syllable_fix_round: syllableFixUsed || undefined,
-    stage: "最终评审：对最后一版歌词做总评",
+    stage: `最终评审：已达 ${maxRounds} 轮上限，对最后一版歌词做总评`,
   });
   const finalCritique = await callCritic({
     prompt,
@@ -586,14 +598,14 @@ export async function generateLyrics(
   });
 
   history.push({
-    round: rounds + 1,
+    round: maxRounds + 1,
     lyrics: currentLyrics,
     critique: finalCritique,
   });
 
   emit({
     type: "critique_done",
-    round: rounds + 1,
+    round: maxRounds + 1,
     score: finalCritique.total_score,
     passed: finalCritique.passed,
     stage: `最终评审完成：得分 ${finalCritique.total_score}（词格符合度 ${finalCritique.dimensions.structure_adherence}/10）`,
@@ -607,7 +619,7 @@ export async function generateLyrics(
   }
 
   // 词解生成（不阻断主流程，失败留空）
-  emit({ type: "interpreting", round: rounds + 1, stage: "词解生成：Interpreter 正在解读歌词并提炼风格关键词" });
+  emit({ type: "interpreting", round: maxRounds + 1, stage: "词解生成：Interpreter 正在解读歌词并提炼风格关键词" });
   const interpretation = await callInterpreter({
     prompt,
     structure,
